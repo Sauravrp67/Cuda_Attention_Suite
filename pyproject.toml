@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools", "wheel", "torch"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cuda_attention_suite"
+version = "0.1.0"
+description = "A hierarchy of optimized CUDA Attention kernels."
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "torch",
+    "numpy",
+]
