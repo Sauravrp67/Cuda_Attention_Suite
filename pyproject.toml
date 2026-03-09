@@ -3,7 +3,7 @@ requires = ["setuptools", "wheel", "torch"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cuda_attention_suite"
+name = "Attention_Variants"
 version = "0.1.0"
 description = "A hierarchy of optimized CUDA Attention kernels."
 readme = "README.md"
@@ -12,3 +12,6 @@ dependencies = [
     "torch",
     "numpy",
 ]
+
+[tool.setuptools]
+packages = ["PyCuAttention"]
