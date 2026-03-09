@@ -34,7 +34,7 @@ __global__ void naive_attention_kernel(
     };
 
 
-at::Tensor naive_attention_fwd(at::Tensor& q, at::Tensor& k, at::Tensor& v, float scaling) {
+at::Tensor naive_attention_fwd(const at::Tensor& q, const at::Tensor& k, const at::Tensor& v, float scaling) {
 
     const int B = q.size(0);
     const int H = q.size(1);
