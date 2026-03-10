@@ -1,8 +1,9 @@
 cmake_minimum_required(VERSION 3.18 FATAL_ERROR)
+
 project(Attention_Variants LANGUAGES CXX CUDA)
 
 # -----------------------------------------------------------------------------
-# 1. High-Performance Hardware Detection
+# 1. CUDA GPU Detection
 # -----------------------------------------------------------------------------
 
 execute_process(
@@ -14,6 +15,10 @@ string(REPLACE "." "" GPU_ARCH_CLEAN ${GPU_ARCH})
 set(CMAKE_CUDA_ARCHITECTURES ${GPU_ARCH})
 
 message(STATUS "🚀 Targeting CUDA Architecture: sm_${GPU_ARCH_CLEAN}")
+
+# Lock Pytorch compilation architector to local Device Architecture
+set(TORCH_CUDA_ARCH_LIST ${CMAKE_CUDA_ARCHITECTURES})
+message(STATUS "🚀 Locked to Architecture: sm_${CMAKE_CUDA_ARCHITECTURES}")
 
 # -----------------------------------------------------------------------------
 # 2. Dependencies & Environment Sync
@@ -27,6 +32,20 @@ execute_process(
     OUTPUT_VARIABLE TORCH_ABI
     OUTPUT_STRIP_TRAILING_WHITESPACE
 )
+
+# Link libtorch_python.so with target for including PyObj to at::Tensor casting logic
+execute_process(
+    COMMAND ${Python3_EXECUTABLE} -c "import torch; print(torch.__path__[0])"
+    OUTPUT_VARIABLE TORCH_LIB_DIR 
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+
+execute_process(
+    COMMAND ${Python3_EXECUTABLE} -c "import sys; import os; print(os.path.join(sys.prefix, 'lib'))"
+    OUTPUT_VARIABLE PYTHON_LIB_DIR
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+
 message(STATUS "🛠️ Syncing with PyTorch ABI: ${TORCH_ABI}")
 
 # -----------------------------------------------------------------------------
@@ -49,23 +68,27 @@ add_library(cuda_attn_backend SHARED
 # -----------------------------------------------------------------------------
 # 5. Target-Specific Properties (The "Full Depth" Way)
 # -----------------------------------------------------------------------------
-target_compile_definitions(cuda_attn_backend PRIVATE 
-    _GLIBCXX_USE_CXX11_ABI=${TORCH_ABI}
-)
+# target_compile_definitions(cuda_attn_backend PRIVATE 
+#     _GLIBCXX_USE_CXX11_ABI=${TORCH_ABI}
+# )
 
 target_compile_options(cuda_attn_backend PRIVATE
     $<$<COMPILE_LANGUAGE:CXX>:-O3 -Wall>
     $<$<COMPILE_LANGUAGE:CUDA>:--extended-lambda --use_fast_math -Xptxas=-v -O3 -Xcompiler -fPIC>
 )
 
-# Crucial: Pass the ABI flag to the NVCC host compiler (gcc)
-target_compile_options(cuda_attn_backend PRIVATE
-    $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler -D_GLIBCXX_USE_CXX11_ABI=${TORCH_ABI}>
-)
+# # Crucial: Pass the ABI flag to the NVCC host compiler (gcc)
+# target_compile_options(cuda_attn_backend PRIVATE
+#     $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler -D_GLIBCXX_USE_CXX11_ABI=${TORCH_ABI}>
+# )
 
 # -----------------------------------------------------------------------------
 # 6. Include Paths & Linking
 # -----------------------------------------------------------------------------
+
+message("Torch Include DIR: ${TORCH_INCLUDE_DIRS}")
+message("Python3 Include DIR: ${Python3_INCLUDE_DIRS}")
+
 target_include_directories(cuda_attn_backend PRIVATE 
     csrc 
     ${Python3_INCLUDE_DIRS}
@@ -75,7 +98,8 @@ target_include_directories(cuda_attn_backend PRIVATE
 target_link_libraries(cuda_attn_backend PRIVATE 
     ${TORCH_LIBRARIES} 
     ${Python3_LIBRARIES}
-)
+    "${TORCH_LIB_DIR}/lib/libtorch_python.so"
+    )
 
 # -----------------------------------------------------------------------------
 # 7. Output & Naming (Match Python Import Requirements)
@@ -84,6 +108,8 @@ set_target_properties(cuda_attn_backend PROPERTIES
     PREFIX "" 
     SUFFIX ".so"
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+    BUILD_WITH_INSTALL_RPATH TRUE
+    INSTALL_RPATH "${TORCH_LIB_DIR}/lib;${PYTHON_LIB_DIR}"
 )
 
 # Custom message for developer feedback

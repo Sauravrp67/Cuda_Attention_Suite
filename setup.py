@@ -37,9 +37,6 @@ class CMakeBuild(build_ext):
             "-DCMAKE_BUILD_TYPE=Release",
         ]
 
-        # if not build_temp.exists():
-        #     build_temp.mkdir(parents=True)
-
         # 3. Execute Build
         subprocess.check_call(["cmake", ext.sourcedir] + cmake_args, cwd=build_dir)
         subprocess.check_call(["cmake", "--build", ".", "--parallel"], cwd=build_dir)

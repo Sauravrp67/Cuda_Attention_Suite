@@ -1,5 +1,3 @@
-import torch
-
 import cuda_attn_backend as _backend
 
 def naive_attn(q,k,v,scaling):
