@@ -1,39 +1,66 @@
 #include <cuda_runtime.h>
 #include <torch/extension.h>
+#include <ATen/ATen.h>
+#include <ATen/Dispatch.h>
 
+#define MAX_SEQ_LEN 4096
+
+template<typename scalar_t>
 __global__ void naive_attention_kernel(
-    const float* __restrict__ q,
-    const float* __restrict__ k,
-    const float* __restrict__ v,
-    float* __restrict__ o,
-    const int B, const int H, const int N, const int D,const float scaling){
+    const scalar_t* __restrict__ q,
+    const scalar_t* __restrict__ k,
+    const scalar_t* __restrict__ v,
+    scalar_t* __restrict__ o,
+    const int B, const int H, const int N, const int D){
         
-        //Thread Indexing
+        // Thread Indexing
         int b = blockIdx.z;
         int h = blockIdx.y;
-        int i = blockIdx.x * blockDim.x + threadIdx.x;
-        
-        // each thread has unique "i", each i represents a unique token
-        if(i < N) {
-            // Compute: QK^T
-            // This represents each unique token in "K", vector. That is each "j", is a unique token in k vector.
-            for (int j = 0; j < N; ++j) {
-                float score = 0.0f;
-                // This represents head dimension. That is each "d" is a Q and K value of each token.
-                for(int d = 0; d < D; ++d) {
-                    score += q[b * H * N * D + h * N * D + i * D + d] * k[b * H * N * D + h * N * D + j * D + d];
-                }
-            score *= scaling;
+        int i = blockIdx.x * blockDim.x + threadIdx.x; 
+        float scores[MAX_SEQ_LEN];
+        const float scale = rsqrtf((float)D);
 
-            // Compute: QK^TV
-            for( int d = 0; d < D; ++d) {
-                atomicAdd(&o[b * H * N * D + h * N * D + i * D + d],score * v[b * H * N * D + h * N * D + j * D + d]);
+        if (i < N) {
+            // Calculate QK^T matrix:
+            for (int j = 0; j < N; j++) {
+                float score = 0;
+                for (int d = 0; d < D; d++) {
+                    score += (float)q[b * H * N * D + h * N * D + i * D + d] * (float)k[b * H * N * D + h * N * D + j * D + d];
+                }
+                scores[j] = score * scale;
             }
+
+            //Offline Softmax
+            // Calculation of Max attention score over a row:
+            float max = scores[0];
+            for(int j = 0; j < N; j++) {
+                if (scores[j] > max) max = scores[j];
+            }
+
+            //Calculation of Sum
+            float sum = 0;
+            for(int j = 0; j < N; j++) {
+                scores[j] = expf(scores[j] - max);
+                sum += scores[j];
+            }
+
+            // Calculation of softmax
+            for (int j = 0; j < N; j++) {
+                scores[j] /= sum;
+            }
+            
+            //Calculation of softmax(QK^T)/sqrt(D))V
+            for (int j = 0; j < N; j++){
+                for (int d = 0; d < D; d++) {
+                    // Here we are performing N*D read and write to global memory. It is costly. We ought to instead this result in 
+                    // Another buffer like: float weight_acc[D]; but this eats up the register, if D is large like  
+                    o[b * H * N * D + h * N * D + i * D + d] += (scalar_t)(scores[j] * (float)v[b * H * N * D + h * N * D + j * D + d]);
+                }
             }
         }
     };
 
-at::Tensor naive_attention_fwd(const at::Tensor& q, const at::Tensor& k, const at::Tensor& v, float scaling) {
+at::Tensor naive_attention_fwd(const at::Tensor& q, const at::Tensor& k, const at::Tensor& v) {
 
     const int B = q.size(0);
     const int H = q.size(1);
@@ -47,12 +74,21 @@ at::Tensor naive_attention_fwd(const at::Tensor& q, const at::Tensor& k, const a
     dim3 grid((N + 256 -1 )/256, H, B);
     dim3 block(256);
 
-    naive_attention_kernel<<<grid,block>>>(
-                                            q.data_ptr<float>(),
-                                            k.data_ptr<float>(),
-                                            v.data_ptr<float>(),
-                                            out.data_ptr<float>(),
-                                            B,H,N,D,scaling);
-
+    AT_DISPATCH_FLOATING_TYPES_AND2(
+        at::ScalarType::Half,
+        at::ScalarType::BFloat16,
+        q.scalar_type(),
+        "native_attention_fwd",
+        [&]() {
+            naive_attention_kernel<scalar_t><<<grid, block>>>(
+                q.data_ptr<scalar_t>(),
+                k.data_ptr<scalar_t>(),
+                v.data_ptr<scalar_t>(),
+                out.data_ptr<scalar_t>(),
+                B, H, N, D
+            );
+        }
+    );
+    
     return out;
 }
