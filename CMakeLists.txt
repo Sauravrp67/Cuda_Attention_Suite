@@ -14,11 +14,11 @@ execute_process(
 string(REPLACE "." "" GPU_ARCH_CLEAN ${GPU_ARCH})
 set(CMAKE_CUDA_ARCHITECTURES ${GPU_ARCH})
 
-message(STATUS "🚀 Targeting CUDA Architecture: sm_${GPU_ARCH_CLEAN}")
+message(STATUS "Targeting CUDA Architecture: sm_${GPU_ARCH_CLEAN}")
 
 # Lock Pytorch compilation architector to local Device Architecture
 set(TORCH_CUDA_ARCH_LIST ${CMAKE_CUDA_ARCHITECTURES})
-message(STATUS "🚀 Locked to Architecture: sm_${CMAKE_CUDA_ARCHITECTURES}")
+message(STATUS "Locked to Architecture: sm_${CMAKE_CUDA_ARCHITECTURES}")
 
 # -----------------------------------------------------------------------------
 # 2. Dependencies & Environment Sync
@@ -66,7 +66,7 @@ add_library(cuda_attn_backend SHARED
 )
 
 # -----------------------------------------------------------------------------
-# 5. Target-Specific Properties (The "Full Depth" Way)
+# 5. Target-Specific Properties
 # -----------------------------------------------------------------------------
 # target_compile_definitions(cuda_attn_backend PRIVATE 
 #     _GLIBCXX_USE_CXX11_ABI=${TORCH_ABI}
@@ -77,7 +77,7 @@ target_compile_options(cuda_attn_backend PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:--extended-lambda --use_fast_math -Xptxas=-v -O3 -Xcompiler -fPIC>
 )
 
-# # Crucial: Pass the ABI flag to the NVCC host compiler (gcc)
+
 # target_compile_options(cuda_attn_backend PRIVATE
 #     $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler -D_GLIBCXX_USE_CXX11_ABI=${TORCH_ABI}>
 # )
@@ -112,5 +112,4 @@ set_target_properties(cuda_attn_backend PROPERTIES
     INSTALL_RPATH "${TORCH_LIB_DIR}/lib/;${PYTHON_LIB_DIR}"
 )
 
-# Custom message for developer feedback
-message(STATUS "✅ Build configured. Shared object will be in: ${CMAKE_BINARY_DIR}/lib")
+message(STATUS "Build configured. Shared object will be in: ${CMAKE_BINARY_DIR}/lib")
