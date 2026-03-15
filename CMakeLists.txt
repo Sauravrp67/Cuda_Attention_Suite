@@ -109,7 +109,7 @@ set_target_properties(cuda_attn_backend PROPERTIES
     SUFFIX ".so"
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
     BUILD_WITH_INSTALL_RPATH TRUE
-    INSTALL_RPATH "${TORCH_LIB_DIR}/lib;${PYTHON_LIB_DIR}"
+    INSTALL_RPATH "${TORCH_LIB_DIR}/lib/;${PYTHON_LIB_DIR}"
 )
 
 # Custom message for developer feedback
