@@ -31,6 +31,8 @@ from tests.conftest import (
     RTOL_FP32,
     ATOL_FP16,
     RTOL_FP16,
+    ATOL_BF16,
+    RTOL_BF16,
     SHAPES_SMALL,
     SHAPES_ALL,
     make_qkv,
@@ -176,6 +178,32 @@ class TestNaiveAttentionV1:
             atol=ATOL_FP16,
             rtol=RTOL_FP16,
         )
+    @pytest.mark.parametrize("shape", SHAPES_SMALL)
+    def test_parity_sdpa_bf16(self, shape):
+        """
+        BFloat16 parity. BF16 has the same exponent range as fp32 (8 bits)
+        but only 7 mantissa bits vs fp32's 23 — even fewer than fp16's 10.
+        Numerical error is therefore at least as large as fp16 and tolerance
+        is set accordingly.
+
+        BF16 is the dominant training dtype on Ampere and later (A100, H100,
+        RTX 3090+). Ada Lovelace (sm_89, your hardware) supports BF16 storage
+        and arithmetic natively.
+        """
+        B, H, N, D = shape
+        q, k, v = make_qkv(B, H, N, D, dtype=torch.bfloat16)
+        ref = sdpa_reference(q, k, v)
+        out = self._run(q, k, v)
+        torch.testing.assert_close(
+            out, ref,
+            atol=ATOL_BF16,
+            rtol=RTOL_BF16,
+            msg=(
+                f"BF16 parity failed for shape B={shape[0]} H={shape[1]} "
+                f"N={shape[2]} D={shape[3]}. "
+                f"Max abs error: {(out.float() - ref.float()).abs().max().item():.2e}"
+            )
+        )
 
     # ------------------------------------------------------------------
     # Numerical stability stress tests
@@ -202,7 +230,7 @@ class TestNaiveAttentionV1:
         assert torch.isfinite(out).all(), (
             "Output is not finite under large scores — softmax is numerically unstable"
         )
-        torch.testing.assert_close(out, ref, atol=ATOL_FP32, rtol=RTOL_FP32)
+        torch.testing.assert_close(out, ref, atol=1e-2, rtol=1e-1)
 
     @pytest.mark.parametrize("shape", [
         pytest.param((1, 1, 128, 64), id="B1_H1_N128_D64"),

@@ -21,8 +21,15 @@ ATOL_FP32 = 1e-4
 RTOL_FP32 = 1e-3
 
 # float16: much larger rounding error is expected
-ATOL_FP16 = 1e-2
-RTOL_FP16 = 1e-2
+ATOL_FP16 = 1e-3
+RTOL_FP16 = 1e-3
+
+# BFloat16: Mantissa bits as fp16 (Actually Fewer 7 mantissa for BFloat16 and 10 for FP16)
+# More exponent bits -> Less overflow risk.
+# Softmax result stays finite more easily.
+# Mantissa Precision is less
+ATOL_BF16 = 5e-3
+RTOL_BF16 = 5e-3
 
 
 # ---------------------------------------------------------------------------
