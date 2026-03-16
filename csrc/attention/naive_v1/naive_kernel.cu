@@ -49,13 +49,28 @@ __global__ void naive_attention_kernel(
                 scores[j] /= sum;
             }
             
-            //Calculation of softmax(QK^T)/sqrt(D))V
-            for (int j = 0; j < N; j++){
-                for (int d = 0; d < D; d++) {
-                    // Here we are performing N*D read and write to global memory. It is costly. We ought to instead this result in 
-                    // Another buffer like: float weight_acc[D]; but this eats up the register, if D is large like  
-                    o[b * H * N * D + h * N * D + i * D + d] += (scalar_t)(scores[j] * (float)v[b * H * N * D + h * N * D + j * D + d]);
+            /*Calculation of softmax(QK^T)/sqrt(D))V 
+             Here we are doing accumulation over D times for a single accumulation: meaning float32 multiply and float16/bfloat16 addition N times.
+             So Rounding Error occurs N times on each += to o[...]. If we do a outer D loop and inner N loop with accumulation happening on register by each thread,
+             We incur rounding error for accumulation only 1 time per element in the output matrix. 
+            */
+
+            //Outer N loop(token) and inner D loop(head dimension)
+            // for (int j = 0; j < N; j++){
+            //     for (int d = 0; d < D; d++) {
+            //         // Here we are performing N*D read and write to global memory. It is costly. We ought to instead store this result in 
+            //         // Another buffer like: float weight_acc[D]; but this eats up the register, if D is large like  
+            //         o[b * H * N * D + h * N * D + i * D + d] += (scalar_t)(scores[j] * (float)v[b * H * N * D + h * N * D + j * D + d]);
+            //     }
+            // }
+
+            //Outer D loop(head dimension) and inner N loop(token).
+            for (int d = 0; d < D; d++) {
+                float acc = 0;
+                for (int j = 0; j < N; j++) {
+                    acc += scores[j] * (float)v[b * H * N * D + h * N * D + j * D + d];
                 }
+                o[b * H * N * D + h * N * D + i * D + d] = (scalar_t) acc;
             }
         }
     };
