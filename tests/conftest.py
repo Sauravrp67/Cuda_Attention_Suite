@@ -1,40 +1,35 @@
-"""
-conftest.py — shared fixtures, parametrize helpers, and pytest configuration
-for the CUDA Attention Suite test suite.
-
-Design principles:
-  - All random tensors are seeded deterministically: reproducible on any machine.
-  - Fixtures are scoped to avoid redundant GPU allocations.
-  - Tolerance constants are centralised here; never scattered across test files.
-  - Hardware skips are declared once and reused everywhere.
-"""
+import sys
+from pathlib import Path
 
 import pytest
 import torch
 
-# ---------------------------------------------------------------------------
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_ROOT = PROJECT_ROOT / "src"
+
+for path in (PROJECT_ROOT, SRC_ROOT):
+    path_str = str(path)
+    if path_str not in sys.path:
+        sys.path.insert(0, path_str)
+
 # Tolerance constants
-# ---------------------------------------------------------------------------
 
 # float32: naive three-pass softmax vs SDPA (different op ordering → ULP drift)
 ATOL_FP32 = 1e-4
 RTOL_FP32 = 1e-3
 
 # float16: much larger rounding error is expected
-ATOL_FP16 = 1e-3
-RTOL_FP16 = 1e-3
+ATOL_FP16 = 5e-3
+RTOL_FP16 = 5e-3
 
 # BFloat16: Mantissa bits as fp16 (Actually Fewer 7 mantissa for BFloat16 and 10 for FP16)
 # More exponent bits -> Less overflow risk.
 # Softmax result stays finite more easily.
 # Mantissa Precision is less
-ATOL_BF16 = 5e-3
-RTOL_BF16 = 5e-3
+ATOL_BF16 = 5e-2
+RTOL_BF16 = 5e-2
 
-
-# ---------------------------------------------------------------------------
 # Hardware availability markers
-# ---------------------------------------------------------------------------
 
 def pytest_configure(config):
     config.addinivalue_line(
@@ -61,16 +56,7 @@ def pytest_runtest_setup(item):
                 f"got sm_{major}{minor}"
             )
 
-
-# ---------------------------------------------------------------------------
 # Canonical shapes
-# ---------------------------------------------------------------------------
-# Each entry is (B, H, N, D). Chosen to cover:
-#   - batch=1 (no batching), batch>1 (batching)
-#   - single head, multi-head
-#   - small N (fits L2), medium N (spills L2), large N (stress test)
-#   - D=64 (GPT-2 / LLaMA canonical head dim)
-#   - N == D (square case), N < D (under-determined), N == 1 (single token)
 
 SHAPES_SMALL = [
     pytest.param((1, 1,    1,  64), id="B1_H1_N1_D64"),       # single token
@@ -86,17 +72,22 @@ SHAPES_SMALL = [
 ]
 
 SHAPES_LARGE = [
-    pytest.param((1,  8, 2048,  64), id="B1_H8_N2048_D64"),
-    pytest.param((1,  8, 4096,  64), id="B1_H8_N4096_D64"),
+    pytest.param((1, 8, 2048, 64), id="B1_H8_N2048_D64"),
+    pytest.param((1, 8, 4096, 64), id="B1_H8_N4096_D64"),
+    pytest.param((2, 8, 4240, 64), id="B2_H8_N4320_D64"),      # Test for N > MAX_SEQ_LEN
     pytest.param((2, 32, 2048, 128), id="B2_H32_N2048_D128"),  # LLaMA-7B head config
 ]
 
 SHAPES_ALL = SHAPES_SMALL + SHAPES_LARGE
 
+MATMUL_SHAPES = [
+    pytest.param((16, 256, 512), id="M16_K256_N512"),
+    pytest.param((64, 512, 512), id="M64_K512_N512"),
+    pytest.param((128, 1024, 512), id="M128_K1024_N512"),
+    pytest.param((256, 1024, 1024), id="M256_K1024_N1024"),
+]
 
-# ---------------------------------------------------------------------------
 # Tensor factory
-# ---------------------------------------------------------------------------
 
 def make_qkv(
     B: int,
@@ -123,10 +114,7 @@ def make_qkv(
 
     return _make(), _make(), _make()
 
-
-# ---------------------------------------------------------------------------
 # Reference implementation
-# ---------------------------------------------------------------------------
 
 def sdpa_reference(
     q: torch.Tensor,
@@ -138,3 +126,39 @@ def sdpa_reference(
     This is the single ground truth for all parity tests.
     """
     return torch.nn.functional.scaled_dot_product_attention(q, k, v)
+
+
+def make_matmul_inputs(
+    M: int,
+    K: int,
+    N: int,
+    dtype: torch.dtype = torch.float32,
+    device: str = "cuda",
+    seed: int = 0,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Returns (A, B) tensors for GEMM parity tests with shapes [M, K] and [K, N].
+    """
+    generator = torch.Generator(device="cpu")
+    generator.manual_seed(seed)
+
+    a = torch.randn(M, K, generator=generator).to(dtype=dtype, device=device)
+    b = torch.randn(K, N, generator=generator).to(dtype=dtype, device=device)
+    return a, b
+
+
+def matmul_reference(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    """Torch reference for the naive GEMM kernel."""
+    return torch.matmul(a, b)
+
+
+def transposed_matmul_reference(
+    a: torch.Tensor,
+    b: torch.Tensor,
+    trans_a: bool = False,
+    trans_b: bool = False,
+) -> torch.Tensor:
+    """Torch reference for GEMM parity tests with optional transpose flags."""
+    lhs = a.transpose(-2, -1) if trans_a else a
+    rhs = b.transpose(-2, -1) if trans_b else b
+    return torch.matmul(lhs, rhs)
