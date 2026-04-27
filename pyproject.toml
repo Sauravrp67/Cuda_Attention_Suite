@@ -14,4 +14,8 @@ dependencies = [
 ]
 
 [tool.setuptools]
-packages = ["PyCuAttention"]
+package-dir = {"" = "src","benchmarks" = "benchmarks"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["benchmarks"]

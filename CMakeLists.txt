@@ -11,6 +11,8 @@ execute_process(
     OUTPUT_VARIABLE GPU_ARCH
     OUTPUT_STRIP_TRAILING_WHITESPACE
 )
+string(REPLACE "\n" ";" GPU_ARCH_LIST "${GPU_ARCH}")
+list(GET GPU_ARCH_LIST 0 GPU_ARCH)
 string(REPLACE "." "" GPU_ARCH_CLEAN ${GPU_ARCH})
 set(CMAKE_CUDA_ARCHITECTURES ${GPU_ARCH})
 
@@ -57,59 +59,92 @@ set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+option(BUILD_LEGACY_PYCUATTENTION "Build the legacy PyCuAttention extension target." OFF)
+set(
+    ATTENTION_VARIANTS_OUTPUT_DIR
+    "${CMAKE_SOURCE_DIR}/src/attention_variants/backends/cuda"
+    CACHE PATH
+    "Output directory for the structured attention_variants CUDA extension."
+)
+set(
+    ATTENTION_VARIANTS_OUTPUT_NAME
+    "attention_variants_cuda"
+    CACHE STRING
+    "Basename of the structured attention_variants CUDA extension."
+)
+
 # -----------------------------------------------------------------------------
-# 4. Define the Extension Library
+# 4. Shared Extension Helper
 # -----------------------------------------------------------------------------
-add_library(cuda_attn_backend SHARED
+function(add_torch_cuda_extension target_name output_name output_dir)
+    add_library(${target_name} SHARED ${ARGN})
+
+    target_compile_options(${target_name} PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:-O3 -Wall>
+        $<$<COMPILE_LANGUAGE:CUDA>:--extended-lambda --use_fast_math -Xptxas=-v -O3 -Xcompiler -fPIC>
+    )
+
+    target_include_directories(${target_name} PRIVATE
+        csrc
+        ${Python3_INCLUDE_DIRS}
+        ${TORCH_INCLUDE_DIRS}
+    )
+
+    target_link_libraries(${target_name} PRIVATE
+        ${TORCH_LIBRARIES}
+        ${Python3_LIBRARIES}
+        "${TORCH_LIB_DIR}/lib/libtorch_python.so"
+    )
+
+    set_target_properties(${target_name} PROPERTIES
+        OUTPUT_NAME "${output_name}"
+        PREFIX ""
+        SUFFIX ".so"
+        LIBRARY_OUTPUT_DIRECTORY "${output_dir}"
+        BUILD_WITH_INSTALL_RPATH TRUE
+        INSTALL_RPATH "${TORCH_LIB_DIR}/lib/;${PYTHON_LIB_DIR}"
+    )
+endfunction()
+
+# -----------------------------------------------------------------------------
+# 5. Backend Source Sets
+# -----------------------------------------------------------------------------
+
+set(LEGACY_BACKEND_SOURCES
     csrc/bindings.cpp
     csrc/attention/naive_v1/naive_kernel.cu
+    csrc/linalg/matmul.cu
+)
+
+set(STRUCTURED_BACKEND_SOURCES
+    csrc/bindings/runtime.cpp
+    csrc/bindings/primitives.cpp
+    csrc/bindings/attention_core.cpp
+    csrc/attention/core/sdpa/naive/naive_kernel.cu
+    csrc/primitives/matmul/matmul.cu
 )
 
 # -----------------------------------------------------------------------------
-# 5. Target-Specific Properties
-# -----------------------------------------------------------------------------
-# target_compile_definitions(cuda_attn_backend PRIVATE 
-#     _GLIBCXX_USE_CXX11_ABI=${TORCH_ABI}
-# )
-
-target_compile_options(cuda_attn_backend PRIVATE
-    $<$<COMPILE_LANGUAGE:CXX>:-O3 -Wall>
-    $<$<COMPILE_LANGUAGE:CUDA>:--extended-lambda --use_fast_math -Xptxas=-v -O3 -Xcompiler -fPIC>
-)
-
-
-# target_compile_options(cuda_attn_backend PRIVATE
-#     $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler -D_GLIBCXX_USE_CXX11_ABI=${TORCH_ABI}>
-# )
-
-# -----------------------------------------------------------------------------
-# 6. Include Paths & Linking
+# 6. Build the Legacy and Structured Python Extensions
 # -----------------------------------------------------------------------------
 
 message("Torch Include DIR: ${TORCH_INCLUDE_DIRS}")
 message("Python3 Include DIR: ${Python3_INCLUDE_DIRS}")
 
-target_include_directories(cuda_attn_backend PRIVATE 
-    csrc 
-    ${Python3_INCLUDE_DIRS}
-    ${TORCH_INCLUDE_DIRS}
-)
-
-target_link_libraries(cuda_attn_backend PRIVATE 
-    ${TORCH_LIBRARIES} 
-    ${Python3_LIBRARIES}
-    "${TORCH_LIB_DIR}/lib/libtorch_python.so"
+if(BUILD_LEGACY_PYCUATTENTION)
+    add_torch_cuda_extension(cuda_attn_backend cuda_attn_backend "${CMAKE_BINARY_DIR}/lib"
+        ${LEGACY_BACKEND_SOURCES}
     )
+endif()
 
-# -----------------------------------------------------------------------------
-# 7. Output & Naming (Match Python Import Requirements)
-# -----------------------------------------------------------------------------
-set_target_properties(cuda_attn_backend PROPERTIES 
-    PREFIX "" 
-    SUFFIX ".so"
-    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
-    BUILD_WITH_INSTALL_RPATH TRUE
-    INSTALL_RPATH "${TORCH_LIB_DIR}/lib/;${PYTHON_LIB_DIR}"
+add_torch_cuda_extension(
+    attention_variants_cuda
+    "${ATTENTION_VARIANTS_OUTPUT_NAME}"
+    "${ATTENTION_VARIANTS_OUTPUT_DIR}"
+    ${STRUCTURED_BACKEND_SOURCES}
 )
 
-message(STATUS "Build configured. Shared object will be in: ${CMAKE_BINARY_DIR}/lib")
+message(STATUS "Structured extension output directory: ${ATTENTION_VARIANTS_OUTPUT_DIR}")
+if(BUILD_LEGACY_PYCUATTENTION)
+    message(STATUS "Legacy extension output directory: ${CMAKE_BINARY_DIR}/lib")
+endif()

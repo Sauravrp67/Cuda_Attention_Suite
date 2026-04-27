@@ -1,6 +1,6 @@
 import os
 import subprocess
-from setuptools import setup, Extension
+from setuptools import setup, Extension, find_packages
 from setuptools.command.build_ext import build_ext
 from pathlib import Path
 
@@ -19,46 +19,36 @@ class CMakeBuild(build_ext):
         
         # 1. Define Paths
         root_dir = Path(__file__).parent.absolute()
-        # build_temp = Path(self.build_temp)
-        # Standardize the output to your root 'build' folder for consistency
         build_dir = root_dir / "build" 
         build_dir.mkdir(parents=True, exist_ok=True)
-        
-        # The internal package destination
-        # Maps 'PyCuAttention.kernels.cuda_attn_backend' to 'PyCuAttention/kernels/bin'
-        target_bin_dir = root_dir / "PyCuAttention" / "kernels" / "bin"
-        target_bin_dir.mkdir(parents=True, exist_ok=True)
+        ext_fullpath = Path(self.get_ext_fullpath(ext.name))
+        ext_output_dir = ext_fullpath.parent
+        ext_output_dir.mkdir(parents=True, exist_ok=True)
+        ext_output_name = ext_fullpath.stem
 
         # 2. Prepare CMake Arguments
         cmake_args = [
             f"-DCMAKE_PREFIX_PATH={torch.utils.cmake_prefix_path}",
             f"-DPYTHON_EXECUTABLE={os.sys.executable}",
-            f"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY={build_dir}/lib",
+            f"-DATTENTION_VARIANTS_OUTPUT_DIR={ext_output_dir}",
+            f"-DATTENTION_VARIANTS_OUTPUT_NAME={ext_output_name}",
+            "-DBUILD_LEGACY_PYCUATTENTION=OFF",
             "-DCMAKE_BUILD_TYPE=Release",
         ]
 
         # 3. Execute Build
-        subprocess.check_call(["cmake", ext.sourcedir] + cmake_args, cwd=build_dir)
+        subprocess.check_call(["cmake", "--fresh", ext.sourcedir] + cmake_args, cwd=build_dir)
         subprocess.check_call(["cmake", "--build", ".", "--parallel"], cwd=build_dir)
-
-        # 4. Create the Symlink (The "No Redundancy" behavior)
-        # This mirrors your build.sh logic within the pip install flow
-        binary_name = "cuda_attn_backend.so"
-        source_path = build_dir / "lib" / binary_name
-        link_path = target_bin_dir / binary_name
-
-        if link_path.exists() or link_path.is_symlink():
-            link_path.unlink()
-        
-        # Creating relative symlink for portability within the same machine
-        os.symlink(source_path, link_path)
-        print(f"--- Symlinked {source_path} -> {link_path}")
+        print(f"--- Built structured extension into {ext_fullpath}")
 
 setup(
     name="Attention_Variants",
     version="0.1.0",
-    packages=["PyCuAttention"],
-    # Ensure the name matches what you import
-    ext_modules=[CMakeExtension("PyCuAttention.kernels.cuda_attn_backend")],
+    package_dir={"": "src"},
+    packages=find_packages(where="src"),
+    ext_modules=[
+        CMakeExtension("attention_variants.backends.cuda.attention_variants_cuda")
+    ],
     cmdclass={"build_ext": CMakeBuild},
+    zip_safe=False,
 )
